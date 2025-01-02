@@ -29,7 +29,7 @@ WITH
   unique_mapping AS (
     SELECT
       *
-    FROM {ref('variant_sku_mapping')}
+    FROM ${ref('variant_sku_mapping')}
   ),
   mapped_feed AS (
     -- Map each variant SKU in feed_info to its general product SKU
