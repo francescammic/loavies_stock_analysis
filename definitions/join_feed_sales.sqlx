@@ -1,0 +1,107 @@
+config {
+  type: "incremental",
+  schema: "dataform_product_feed",
+  name: "output_stock_analysis", //CHANGE NAME
+  description: "Analysis of stock and sales data for product SKUs",
+  bigquery: {
+    partitionBy: "date"
+  }
+}
+
+WITH
+  feed_info AS (
+    SELECT 
+        snapshot_date,
+        sku AS variant_sku,  -- This is the variant SKU in the feed
+        STRING_AGG(DISTINCT size, ', ') AS sizes,  -- Concatenate sizes for each variant SKU
+        SUM(stock) AS total_bf_stock
+    FROM (
+        SELECT 
+            snapshot_date,
+            sku,
+            size,
+            GREATEST(CAST(stock AS FLOAT64), 0) AS stock
+        FROM `crack-celerity-275610.product_feed.product_feed_snapshot`
+        WHERE attribute_set_name = 'Clothing'
+    )
+    GROUP BY snapshot_date, sku
+  ),
+  unique_mapping AS (
+    SELECT
+      *
+    FROM ${ref('variant_sku_mapping')}
+  ),
+  mapped_feed AS (
+    -- Map each variant SKU in feed_info to its general product SKU
+    SELECT
+      u.product_sku,
+      u.category_level_1,
+      u.category_level_2,
+      u.category_level_3,
+      PARSE_DATE('%Y-%m-%d', f.snapshot_date) AS snapshot_date,  -- Convert snapshot_date from STRING to DATE
+      f.sizes,
+      f.total_bf_stock
+    FROM feed_info AS f
+    LEFT JOIN unique_mapping AS u
+    ON f.variant_sku = u.variant_sku
+  ),
+  aggregated_feed AS (
+    -- Aggregate to the general SKU level
+    SELECT
+      product_sku,
+      category_level_1,
+      category_level_2,
+      category_level_3,
+      snapshot_date,
+      STRING_AGG(sizes, ', ') AS aggregated_sizes,  -- Combine sizes across variants
+      SUM(total_bf_stock) AS total_stock  -- Sum stock across variants
+    FROM mapped_feed
+    WHERE product_sku IS NOT NULL  -- Exclude unmapped variant SKUs
+    GROUP BY product_sku, snapshot_date, category_level_1, category_level_2, category_level_3
+  ),
+  w_sales_info AS (
+    SELECT
+      COALESCE(sw.date, af.snapshot_date) AS date,
+      COALESCE(sw.product_sku, af.product_sku) AS product_sku,
+      COALESCE(sw.category_level_1, af.category_level_1) AS category_level_1,
+      COALESCE(sw.category_level_2, af.category_level_2) AS category_level_2,
+      COALESCE(sw.category_level_3, af.category_level_3) AS category_level_3,
+      sw.items_viewed AS items_viewed,
+      sw.add_to_carts AS add_to_carts,
+      sw.purchased_items AS purchased_items,
+      af.aggregated_sizes,
+      af.total_stock
+    FROM ${ref('sales_web_information')} sw --this comes from stock_analysis_br_data
+    FULL OUTER JOIN aggregated_feed af
+    ON sw.date = af.snapshot_date AND sw.product_sku = af.product_sku
+  )
+SELECT
+  *,
+  RANK() OVER (PARTITION BY date ORDER BY items_viewed DESC) AS rank_items_viewed,
+  RANK() OVER (PARTITION BY date ORDER BY add_to_carts DESC) AS rank_add_to_carts,
+  RANK() OVER (PARTITION BY date ORDER BY purchased_items DESC) AS rank_purchased_items
+FROM w_sales_info
+${when(incremental(), `WHERE date > (SELECT MAX(date) FROM ${self()})`)}
+
+-- Pre-operations for table creation and cleanup
+pre_operations {
+  CREATE TABLE IF NOT EXISTS ${self()} (
+    date DATE,
+    product_sku STRING,
+    category_level_1 STRING,
+    category_level_2 STRING,
+    category_level_3 STRING,
+    items_viewed INT64,
+    add_to_carts NUMERIC,
+    purchased_items NUMERIC,
+    aggregated_sizes STRING,
+    total_stock INT64,
+    rank_items_viewed INT64,
+    rank_add_to_carts INT64,
+    rank_purchased_items INT64
+  ) PARTITION BY date;
+
+  DELETE FROM ${self()}
+  WHERE date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
+                  AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
+}

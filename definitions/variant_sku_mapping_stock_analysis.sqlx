@@ -1,0 +1,81 @@
+config {
+  type: "incremental",
+  schema: "dataform_product_feed",
+  name: "variant_sku_mapping", //CHANGE NAME
+  description: "Mapping of variant SKUs to general product SKUs with deduplication",
+  bigquery: {
+    partitionBy: "DATE(localized_timestamp)"
+  }
+}
+
+-- WITH clauses for data transformation
+WITH cleaned_purchase_item AS (
+  -- Step 1: Filter out invalid variant_sku values
+  SELECT
+    REPLACE(REPLACE(REPLACE(properties.product_sku, '[', ''), ']', ''), '"', '') AS product_sku,
+    REPLACE(REPLACE(REPLACE(properties.variant_sku, '[', ''), ']', ''), '"', '') AS variant_sku,
+    LOWER(properties.category_level_1) AS category_level_1,
+    LOWER(properties.category_level_2) AS category_level_2,
+    LOWER(properties.category_level_3) AS category_level_3,
+    DATETIME(timestamp, "Europe/Amsterdam") AS localized_timestamp
+  FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.purchase_item`
+  WHERE
+    properties.variant_sku IS NOT NULL AND properties.variant_sku != ''  -- Exclude NULL or empty string
+),
+deduplicated_mapping AS (
+  -- Step 2: Deduplicate to ensure each variant_sku maps to only one product_sku
+  SELECT
+    product_sku,
+    variant_sku,
+    category_level_1,
+    category_level_2,
+    category_level_3,
+    localized_timestamp
+  FROM (
+    SELECT
+      product_sku,
+      variant_sku,
+      category_level_1,
+      category_level_2,
+      category_level_3,
+      localized_timestamp,
+      ROW_NUMBER() OVER (PARTITION BY variant_sku ORDER BY localized_timestamp DESC) AS row_num
+    FROM
+      cleaned_purchase_item
+  )
+  WHERE
+    row_num = 1  -- Keep only the most recent mapping per variant_sku
+),
+distinct_values AS (
+  -- Step 3: Final unique mapping table
+  SELECT
+    DISTINCT product_sku,
+    variant_sku,
+    category_level_1,
+    category_level_2,
+    category_level_3,
+    localized_timestamp
+  FROM
+    deduplicated_mapping
+)
+
+SELECT
+  *
+FROM distinct_values
+${when(incremental(), `WHERE DATE(localized_timestamp) > (SELECT MAX(DATE(localized_timestamp)) FROM ${self()})`)}
+
+-- Pre-operations for table creation and cleanup
+pre_operations {
+  CREATE TABLE IF NOT EXISTS ${self()} (
+    product_sku STRING,
+    variant_sku STRING,
+    category_level_1 STRING,
+    category_level_2 STRING,
+    category_level_3 STRING,
+    localized_timestamp TIMESTAMP
+  ) PARTITION BY DATE(localized_timestamp);
+
+  DELETE FROM ${self()}
+  WHERE DATE(localized_timestamp) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
+                                      AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
+}
