@@ -1,0 +1,110 @@
+config {
+  type: "incremental",
+  schema: "dataform_product_feed",
+  name: "sales_web_information", //CHANGE NAME
+  description: "Aggregated sales and web information for product SKUs from Bloomreach",
+  bigquery: {
+    partitionBy: "date"
+  }
+}
+
+-- WITH clauses for data transformation
+WITH 
+  view_item AS (
+    SELECT 
+      DATE(TIMESTAMP(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam"))) AS date,
+      properties.product_sku, 
+      COUNT(*) AS items_viewed
+    FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.view_item`
+    WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
+    GROUP BY date, product_sku
+  ),
+  add_to_carts AS (
+    SELECT 
+      DATE(TIMESTAMP(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam"))) AS date,
+      properties.product_sku, 
+      SUM(properties.quantity) AS add_to_carts
+    FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.cart_update`
+    WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
+      AND properties.action = 'add'
+    GROUP BY date, product_sku
+  ),
+  purchase_items AS (
+    SELECT 
+      DATE(TIMESTAMP(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam"))) AS date,
+      properties.product_sku, 
+      SUM(properties.quantity) AS purchased_items
+    FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.purchase_item`
+    WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
+    GROUP BY date, product_sku
+  ),
+  mapping_table AS (
+    SELECT 
+      properties.product_sku,
+      properties.category_level_1,
+      properties.category_level_2,
+      properties.category_level_3,
+      DATE(TIMESTAMP(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam"))) AS date,
+      ROW_NUMBER() OVER (PARTITION BY properties.product_sku ORDER BY TIMESTAMP(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) DESC) AS row_num
+    FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.purchase_item`
+  ),
+  unique_mapping AS (
+    SELECT 
+      product_sku,
+      category_level_1,
+      category_level_2,
+      category_level_3
+    FROM mapping_table
+    WHERE row_num = 1 -- Keep only the latest row for each product_sku
+  ),
+  all_keys AS (
+    -- Create the universal set of dates and product SKUs
+    SELECT DISTINCT date, product_sku FROM view_item
+    UNION DISTINCT
+    SELECT DISTINCT date, product_sku FROM add_to_carts
+    UNION DISTINCT
+    SELECT DISTINCT date, product_sku FROM purchase_items
+  ),
+  joined_data AS (
+    -- Join the universal set with each table
+    SELECT 
+      k.date,
+      k.product_sku,
+      COALESCE(v.items_viewed, 0) AS items_viewed,
+      COALESCE(a.add_to_carts, 0) AS add_to_carts,
+      COALESCE(p.purchased_items, 0) AS purchased_items
+    FROM all_keys k
+    LEFT JOIN view_item v ON k.date = v.date AND k.product_sku = v.product_sku
+    LEFT JOIN add_to_carts a ON k.date = a.date AND k.product_sku = a.product_sku
+    LEFT JOIN purchase_items p ON k.date = p.date AND k.product_sku = p.product_sku
+  )
+SELECT 
+  j.date,
+  j.product_sku,
+  j.items_viewed,
+  j.add_to_carts,
+  j.purchased_items,
+  m.category_level_1,
+  m.category_level_2,
+  m.category_level_3
+FROM joined_data j
+LEFT JOIN unique_mapping m ON j.product_sku = m.product_sku
+${when(incremental(), `WHERE date > (SELECT MAX(date) FROM ${self()})`)}
+
+-- Pre-operations for table creation and cleanup
+pre_operations {
+  CREATE TABLE IF NOT EXISTS ${self()} (
+    date DATE,
+    product_sku STRING,
+    items_viewed INT64,
+    add_to_carts NUMERIC,
+    purchased_items NUMERIC,
+    category_level_1 STRING,
+    category_level_2 STRING,
+    category_level_3 STRING
+  ) PARTITION BY date;
+
+  DELETE FROM ${self()}
+  WHERE date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
+                  AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
+}
