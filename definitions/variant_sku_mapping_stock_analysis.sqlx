@@ -1,12 +1,9 @@
 config {
   type: "incremental",
   schema: "dataform_product_feed",
-  name: "variant_sku_mapping", //CHANGE NAME
-  description: "Mapping of variant SKUs to general product SKUs with deduplication",
-  bigquery: {
-    partitionBy: "DATE(localized_timestamp)"
-  }
-}
+  name: "variant_sku_mapping", 
+  description: "Mapping of variant SKUs to general product SKUs with deduplication"
+} --got rid of the partition by due to the errors with localized_timestamp
 
 -- WITH clauses for data transformation
 WITH cleaned_purchase_item AS (
@@ -60,9 +57,18 @@ distinct_values AS (
 )
 
 SELECT
-  *
+  product_sku,
+  variant_sku,
+  category_level_1,
+  category_level_2,
+  category_level_3,
+  localized_timestamp
 FROM distinct_values
-${when(incremental(), `WHERE DATE(localized_timestamp) > (SELECT MAX(DATE(localized_timestamp)) FROM ${self()})`)}
+${when(incremental(), `WHERE DATE(localized_timestamp) > COALESCE(
+  (SELECT MAX(DATE(localized_timestamp)) FROM ${self()}),
+  '1900-01-01')`)}
+ --changed this incremental statement due to the errors with localized_timestamp
+
 
 -- Pre-operations for table creation and cleanup
 pre_operations {
@@ -72,10 +78,10 @@ pre_operations {
     category_level_1 STRING,
     category_level_2 STRING,
     category_level_3 STRING,
-    localized_timestamp TIMESTAMP
-  ) PARTITION BY DATE(localized_timestamp);
+    localized_timestamp DATETIME
+  );
 
   DELETE FROM ${self()}
-  WHERE DATE(localized_timestamp) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
+  WHERE DATETIME(localized_timestamp) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
                                       AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
 }
