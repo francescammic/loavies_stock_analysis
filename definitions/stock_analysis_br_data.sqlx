@@ -16,7 +16,7 @@ WITH
       properties.product_sku, 
       COUNT(*) AS items_viewed
     FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.view_item`
-    WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
+    -- WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
     GROUP BY date, product_sku
   ),
   add_to_carts AS (
@@ -25,8 +25,8 @@ WITH
       properties.product_sku, 
       SUM(properties.quantity) AS add_to_carts
     FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.cart_update`
-    WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
-      AND properties.action = 'add'
+    -- WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
+      WHERE properties.action = 'add'
     GROUP BY date, product_sku
   ),
   purchase_items AS (
@@ -35,7 +35,7 @@ WITH
       properties.product_sku, 
       SUM(properties.quantity) AS purchased_items
     FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.purchase_item`
-    WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
+    -- WHERE DATE(TIMESTAMP(DATETIME(timestamp), "Europe/Amsterdam")) >= DATE_SUB(CURRENT_DATE("Europe/Amsterdam"), INTERVAL 2 DAY)
     GROUP BY date, product_sku
   ),
   mapping_table AS (
