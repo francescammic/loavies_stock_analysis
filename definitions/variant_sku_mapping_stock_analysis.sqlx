@@ -64,11 +64,11 @@ SELECT
   category_level_3,
   localized_timestamp
 FROM distinct_values
-${when(incremental(), `WHERE DATE(localized_timestamp) > COALESCE(
-  (SELECT MAX(DATE(localized_timestamp)) FROM ${self()}),
-  '1900-01-01')`)}
- --changed this incremental statement due to the errors with localized_timestamp
-
+WHERE DATE(localized_timestamp) > (
+  SELECT IFNULL(MAX(DATE(localized_timestamp)), DATE("2024-11-07"))
+  FROM ${self()}
+)
+--this handles for the first execution the start date being 2024-11-08 and then each run after that only adding new data for the incremental logic
 
 -- Pre-operations for table creation and cleanup
 pre_operations {
