@@ -1,6 +1,6 @@
 config {
   type: "incremental",
-  schema: "dataform_product_feed",
+  schema: "product_feed",
   name: "output_stock_analysis", //CHANGE NAME
   description: "Analysis of stock and sales data for product SKUs",
   bigquery: {

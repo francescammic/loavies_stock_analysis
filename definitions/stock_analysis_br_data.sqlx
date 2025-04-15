@@ -1,6 +1,6 @@
 config {
   type: "incremental",
-  schema: "dataform_product_feed",
+  schema: "product_feed",
   name: "sales_web_information", //CHANGE NAME
   description: "Aggregated sales and web information for product SKUs from Bloomreach",
   bigquery: {
