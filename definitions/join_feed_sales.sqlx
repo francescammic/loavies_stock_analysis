@@ -81,7 +81,11 @@ SELECT
   RANK() OVER (PARTITION BY date ORDER BY add_to_carts DESC) AS rank_add_to_carts,
   RANK() OVER (PARTITION BY date ORDER BY purchased_items DESC) AS rank_purchased_items
 FROM w_sales_info
-${when(incremental(), `WHERE date > (SELECT MAX(date) FROM ${self()})`)}
+WHERE date > (
+  SELECT IFNULL(MAX(date), DATE("2024-11-07"))
+  FROM ${self()}
+ )
+--this handles for the first execution the start date being 2024-11-08 and then each run after that only adding new data for the incremental logic
 
 -- Pre-operations for table creation and cleanup
 pre_operations {
