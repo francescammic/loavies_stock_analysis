@@ -1,6 +1,6 @@
 config {
   type: "incremental",
-  schema: "dataform_product_feed",
+  schema: "product_feed",
   name: "variant_sku_mapping", 
   description: "Mapping of variant SKUs to general product SKUs with deduplication"
 } --got rid of the partition by due to the errors with localized_timestamp
