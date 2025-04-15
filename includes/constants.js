@@ -8,7 +8,7 @@ const database = 'crack-celerity-275610' ;
 // -- DATASETS -- 
 
 // OUTPUT DATASET
-const dataset_output = 'dataform_product_feed' ;
+const dataset_output = 'product_feed' ;
 
 
 // -- TABLES -- 
