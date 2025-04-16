@@ -1,5 +1,5 @@
 defaultProject: crack-celerity-275610
 defaultLocation: EU
-defaultDataset: dataform
+defaultDataset: product_feed
 defaultAssertionDataset: dataform_assertions
 dataformCoreVersion: 3.0.0
