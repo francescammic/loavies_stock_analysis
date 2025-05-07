@@ -63,9 +63,9 @@ WITH
     SELECT
       COALESCE(sw.date, af.snapshot_date) AS date,
       COALESCE(sw.product_sku, af.product_sku) AS product_sku,
-      COALESCE(sw.category_level_1, af.category_level_1) AS category_level_1,
-      COALESCE(sw.category_level_2, af.category_level_2) AS category_level_2,
-      COALESCE(sw.category_level_3, af.category_level_3) AS category_level_3,
+      LOWER(COALESCE(sw.category_level_1, af.category_level_1)) AS category_level_1,
+      LOWER(COALESCE(sw.category_level_2, af.category_level_2)) AS category_level_2,
+      LOWER(COALESCE(sw.category_level_3, af.category_level_3)) AS category_level_3,
       sw.items_viewed AS items_viewed,
       sw.add_to_carts AS add_to_carts,
       sw.purchased_items AS purchased_items,
@@ -81,10 +81,12 @@ SELECT
   RANK() OVER (PARTITION BY date ORDER BY add_to_carts DESC) AS rank_add_to_carts,
   RANK() OVER (PARTITION BY date ORDER BY purchased_items DESC) AS rank_purchased_items
 FROM w_sales_info
-WHERE date > (
-  SELECT IFNULL(MAX(date), DATE("2024-11-07"))
-  FROM ${self()}
- )
+${when(incremental(), 
+  `WHERE date > (
+     SELECT IFNULL(MAX(date), DATE("2024-11-07"))
+     FROM ${self()}
+  )`
+)}
 --this handles for the first execution the start date being 2024-11-08 and then each run after that only adding new data for the incremental logic
 
 -- Pre-operations for table creation and cleanup

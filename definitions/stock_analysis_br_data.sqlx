@@ -89,10 +89,13 @@ SELECT
   m.category_level_3
 FROM joined_data j
 LEFT JOIN unique_mapping m ON j.product_sku = m.product_sku
-WHERE date > (
-  SELECT IFNULL(MAX(date), DATE("2024-11-07"))
-  FROM ${self()}
-)
+${when(incremental(), 
+  `WHERE date > (
+     SELECT IFNULL(MAX(date), DATE("2024-11-07"))
+     FROM ${self()}
+  )`
+)}
+
 --this handles for the first execution the start date being 2024-11-08 and then each run after that only adding new data for the incremental logic
 
 -- Pre-operations for table creation and cleanup

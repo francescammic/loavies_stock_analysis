@@ -57,18 +57,11 @@ distinct_values AS (
 )
 
 SELECT
-  product_sku,
-  variant_sku,
-  category_level_1,
-  category_level_2,
-  category_level_3,
-  localized_timestamp
+  *
 FROM distinct_values
-WHERE DATE(localized_timestamp) > (
-  SELECT IFNULL(MAX(DATE(localized_timestamp)), DATE("2024-11-07"))
-  FROM ${self()}
-)
---this handles for the first execution the start date being 2024-11-08 and then each run after that only adding new data for the incremental logic
+${when(incremental(), 
+  `WHERE localized_timestamp > (SELECT MAX(localized_timestamp) FROM ${self()})`
+)}
 
 -- Pre-operations for table creation and cleanup
 pre_operations {
