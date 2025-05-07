@@ -1,0 +1,69 @@
+config {
+  type: "incremental",
+  schema: "product_feed",
+  name: "status_rank", 
+  description: "rank compared with stock level and set into a status",
+  bigquery: {
+    partitionBy: "date"
+  }
+}
+
+SELECT
+  *,
+  LAG(rank_items_viewed) OVER (PARTITION BY product_sku ORDER BY date) AS previous_views_rank,
+  LAG(rank_add_to_carts) OVER (PARTITION BY product_sku ORDER BY date) AS previous_add_to_cart_rank,
+  LAG(rank_purchased_items) OVER (PARTITION BY product_sku ORDER BY date) AS previous_sales_rank,
+  CASE
+    WHEN total_stock = 0 AND items_viewed = 0 THEN 'Dropped - OOS'
+    WHEN total_stock > 0 AND items_viewed = 0 THEN 'Dropped - No Demand'
+    WHEN items_viewed > 0 THEN 'Viewing'
+    ELSE 'No Data'
+  END AS views_status,
+  CASE
+    WHEN total_stock = 0 AND add_to_carts = 0 THEN 'Dropped - OOS'
+    WHEN total_stock > 0 AND add_to_carts = 0 THEN 'Dropped - No Demand'
+    WHEN add_to_carts > 0 THEN 'Adding to Cart'
+    ELSE 'No Data'
+  END AS add_to_cart_status,
+  CASE
+    WHEN total_stock = 0 AND purchased_items = 0 THEN 'Dropped - OOS'
+    WHEN total_stock > 0 AND purchased_items = 0 THEN 'Dropped - No Demand'
+    WHEN purchased_items > 0 THEN 'Selling'
+    ELSE 'No Data'
+  END AS sales_status
+FROM ${ref('output_stock_analysis')}
+${when(incremental(), 
+  `WHERE date > (
+     SELECT IFNULL(MAX(date), DATE("2024-11-07"))
+     FROM ${self()}
+  )`
+)}
+
+
+pre_operations {
+  CREATE TABLE IF NOT EXISTS ${self()} (
+    date DATE,
+    product_sku STRING,
+    category_level_1 STRING,
+    category_level_2 STRING,
+    category_level_3 STRING,
+    items_viewed INT64,
+    add_to_carts NUMERIC,
+    purchased_items NUMERIC,
+    aggregated_sizes STRING,
+    total_stock INT64,
+    rank_items_viewed INT64,
+    rank_add_to_carts INT64,
+    rank_purchased_items INT64,
+    previous_views_rank INT64,
+    previous_add_to_cart_rank INT64,
+    previous_sales_rank INT64,
+    views_status STRING,
+    add_to_cart_status STRING,
+    sales_status STRING
+  ) PARTITION BY date;
+
+  DELETE FROM ${self()}
+  WHERE date BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
+                  AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
+}
