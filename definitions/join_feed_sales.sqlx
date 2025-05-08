@@ -1,7 +1,7 @@
 config {
   type: "incremental",
   schema: "product_feed",
-  name: "output_stock_analysis", //CHANGE NAME
+  name: "output_stock_analysis",
   description: "Analysis of stock and sales data for product SKUs",
   bigquery: {
     partitionBy: "date"
@@ -22,7 +22,6 @@ WITH
             size,
             GREATEST(CAST(stock AS FLOAT64), 0) AS stock
         FROM `crack-celerity-275610.product_feed.product_feed_snapshot`
-        WHERE attribute_set_name = 'Clothing'
     )
     GROUP BY snapshot_date, sku
   ),
@@ -66,12 +65,12 @@ WITH
       LOWER(COALESCE(sw.category_level_1, af.category_level_1)) AS category_level_1,
       LOWER(COALESCE(sw.category_level_2, af.category_level_2)) AS category_level_2,
       LOWER(COALESCE(sw.category_level_3, af.category_level_3)) AS category_level_3,
-      sw.items_viewed AS items_viewed,
-      sw.add_to_carts AS add_to_carts,
-      sw.purchased_items AS purchased_items,
+      COALESCE(sw.items_viewed, 0) AS items_viewed, --fills nulls with 0 to not affect status rank
+      COALESCE(sw.add_to_carts, 0) AS add_to_carts, --fills nulls with 0 to not affect status rank
+      COALESCE(sw.purchased_items, 0) AS purchased_items, --fills nulls with 0 to not affect status rank
       af.aggregated_sizes,
       af.total_stock
-    FROM ${ref('sales_web_information')} sw --this comes from stock_analysis_br_data
+    FROM ${ref('sales_web_information')} sw 
     FULL OUTER JOIN aggregated_feed af
     ON sw.date = af.snapshot_date AND sw.product_sku = af.product_sku
   )
