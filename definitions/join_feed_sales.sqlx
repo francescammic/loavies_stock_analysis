@@ -7,28 +7,41 @@ config {
     partitionBy: "date"
   }
 }
-
-WITH
-  feed_info AS (
-    SELECT 
-        snapshot_date,
-        sku AS variant_sku,  -- This is the variant SKU in the feed
-        STRING_AGG(DISTINCT size, ', ') AS sizes,  -- Concatenate sizes for each variant SKU
-        SUM(stock) AS total_bf_stock
-    FROM (
-        SELECT 
-            snapshot_date,
-            sku,
-            size,
-            GREATEST(CAST(stock AS FLOAT64), 0) AS stock
-        FROM `crack-celerity-275610.product_feed.product_feed_snapshot`
-    )
-    GROUP BY snapshot_date, sku
-  ),
+-- raw_feed & feed_corrected is for filling the stock = 0 due to a delay in the product_feed_snapshot not having the stock filled for the first day.
+WITH raw_feed AS (
+  SELECT
+    snapshot_date,
+    sku,
+    size,
+    GREATEST(CAST(stock AS FLOAT64), 0) AS raw_stock,
+    ROW_NUMBER() OVER (PARTITION BY sku ORDER BY snapshot_date) AS row_num,
+    LEAD(GREATEST(CAST(stock AS FLOAT64), 0)) OVER (PARTITION BY sku ORDER BY snapshot_date) AS next_stock
+  FROM `crack-celerity-275610.product_feed.product_feed_snapshot`
+),
+feed_corrected AS (
+  SELECT
+    snapshot_date,
+    sku,
+    size,
+    CASE 
+      WHEN row_num = 1 AND raw_stock = 0 AND next_stock > 1.0 THEN next_stock --when the first row stock = 0, and the next row is greater than 1, then it gets replaced with the next rows stock value.
+      ELSE raw_stock
+    END AS stock
+  FROM raw_feed
+),
+feed_info AS (
+  SELECT 
+    snapshot_date,
+    sku AS variant_sku,
+    STRING_AGG(DISTINCT size, ', ') AS sizes,
+    SUM(stock) AS total_bf_stock
+  FROM feed_corrected
+  GROUP BY snapshot_date, sku
+),
   unique_mapping AS (
     SELECT
       *
-    FROM ${ref('variant_sku_mapping')}
+    FROM ${ref('variant_sku_mapping')} 
   ),
   mapped_feed AS (
     -- Map each variant SKU in feed_info to its general product SKU
@@ -73,13 +86,41 @@ WITH
     FROM ${ref('sales_web_information')} sw 
     FULL OUTER JOIN aggregated_feed af
     ON sw.date = af.snapshot_date AND sw.product_sku = af.product_sku
-  )
+  ),
+  --filled_sales_info and final_output is for filling the null total_stock, and aggregated sizes values due to the product sku on that date not exisiting in the product_feed_snapshot due to a delay.
+  filled_sales_info AS (
+  SELECT
+    *,
+    LEAD(total_stock) OVER (PARTITION BY product_sku ORDER BY date) AS next_stock,
+    LEAD(aggregated_sizes) OVER (PARTITION BY product_sku ORDER BY date) AS next_sizes
+  FROM w_sales_info
+  ),
+  final_output AS (
+  SELECT
+    date,
+    product_sku,
+    category_level_1,
+    category_level_2,
+    category_level_3,
+    items_viewed,
+    add_to_carts,
+    purchased_items,
+    CASE 
+      WHEN aggregated_sizes IS NULL AND next_sizes IS NOT NULL THEN next_sizes --same case for size
+      ELSE aggregated_sizes
+    END AS aggregated_sizes,
+    CASE 
+      WHEN total_stock IS NULL AND next_stock IS NOT NULL THEN next_stock --when total_stock is null, and the next row stock is not null, that value gets filled. There are cases with the first 2 rows of nulls and 1 purchase showing, but the product is not online yet, so the first null stays as null, and only the null right before the the product info is filled, gets filled.
+      ELSE total_stock
+    END AS total_stock
+  FROM filled_sales_info
+)
 SELECT
   *,
   RANK() OVER (PARTITION BY date ORDER BY items_viewed DESC) AS rank_items_viewed,
   RANK() OVER (PARTITION BY date ORDER BY add_to_carts DESC) AS rank_add_to_carts,
   RANK() OVER (PARTITION BY date ORDER BY purchased_items DESC) AS rank_purchased_items
-FROM w_sales_info
+FROM final_output
 ${when(incremental(), 
   `WHERE date > (
      SELECT IFNULL(MAX(date), DATE("2024-11-07"))
