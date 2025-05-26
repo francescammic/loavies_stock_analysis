@@ -2,38 +2,68 @@ config {
   type: "incremental",
   schema: "product_feed",
   name: "status_rank", 
-  description: "rank compared with stock level and set into a status",
+  description: "rank compared with stock level and set into a status. filtered for products with last stocked within the last 90 days",
   bigquery: {
     partitionBy: "date"
   }
 }
 
+WITH last_stocked_date AS (
+  SELECT
+    sku,
+    MAX(snapshot_date) AS last_stock_date
+  FROM `crack-celerity-275610.product_feed.product_feed_snapshot` 
+  WHERE SAFE_CAST(stock AS FLOAT64) > 0.0
+  GROUP BY sku
+),
+sku_mapping AS (
+  SELECT *
+  FROM `product_feed.variant_sku_mapping`
+),
+product_last_stocked AS (
+  SELECT
+    m.product_sku,
+    MAX(ls.last_stock_date) AS last_stock_date
+  FROM last_stocked_date ls
+  JOIN sku_mapping m 
+    ON ls.sku = m.variant_sku
+  GROUP BY m.product_sku
+)
+
 SELECT
-  *,
-  LAG(rank_items_viewed) OVER (PARTITION BY product_sku ORDER BY date) AS previous_views_rank,
-  LAG(rank_add_to_carts) OVER (PARTITION BY product_sku ORDER BY date) AS previous_add_to_cart_rank,
-  LAG(rank_purchased_items) OVER (PARTITION BY product_sku ORDER BY date) AS previous_sales_rank,
+  o.*,
+  LAG(rank_items_viewed) OVER (PARTITION BY o.product_sku ORDER BY o.date) AS previous_views_rank,
+  LAG(rank_add_to_carts) OVER (PARTITION BY o.product_sku ORDER BY o.date) AS previous_add_to_cart_rank,
+  LAG(rank_purchased_items) OVER (PARTITION BY o.product_sku ORDER BY o.date) AS previous_sales_rank,
+  
+  -- Status Flags
   CASE
     WHEN total_stock = 0 AND items_viewed = 0 THEN 'Dropped - OOS'
     WHEN total_stock > 0 AND items_viewed = 0 THEN 'Dropped - No Demand'
     WHEN items_viewed > 0 THEN 'Viewing'
     ELSE 'No Data'
   END AS views_status,
+  
   CASE
     WHEN total_stock = 0 AND add_to_carts = 0 THEN 'Dropped - OOS'
     WHEN total_stock > 0 AND add_to_carts = 0 THEN 'Dropped - No Demand'
     WHEN add_to_carts > 0 THEN 'Adding to Cart'
     ELSE 'No Data'
   END AS add_to_cart_status,
+  
   CASE
     WHEN total_stock = 0 AND purchased_items = 0 THEN 'Dropped - OOS'
     WHEN total_stock > 0 AND purchased_items = 0 THEN 'Dropped - No Demand'
     WHEN purchased_items > 0 THEN 'Selling'
     ELSE 'No Data'
   END AS sales_status
-FROM ${ref('output_stock_analysis')}
+
+FROM ${ref('output_stock_analysis')} o
+JOIN product_last_stocked pls
+  ON o.product_sku = pls.product_sku
+WHERE DATE(pls.last_stock_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY) 
 ${when(incremental(), 
-  `WHERE date > (
+  `AND date > (
      SELECT IFNULL(MAX(date), DATE("2024-11-07"))
      FROM ${self()}
   )`
