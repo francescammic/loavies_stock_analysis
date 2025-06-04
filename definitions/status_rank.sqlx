@@ -7,7 +7,6 @@ config {
     partitionBy: "date"
   }
 }
-
 WITH last_stocked_date AS (
   SELECT
     sku,
@@ -18,23 +17,39 @@ WITH last_stocked_date AS (
 ),
 sku_mapping AS (
   SELECT *
-  FROM `product_feed.variant_sku_mapping`
+  FROM ${ref('variant_sku_mapping')} 
 ),
-product_last_stocked AS (
-  SELECT
-    m.product_sku,
-    MAX(ls.last_stock_date) AS last_stock_date
+recent_product_skus AS (
+  SELECT DISTINCT m.product_sku
   FROM last_stocked_date ls
   JOIN sku_mapping m 
     ON ls.sku = m.variant_sku
-  GROUP BY m.product_sku
+  WHERE DATE(ls.last_stock_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY)
+),
+revenue_per_product_day AS (
+  SELECT
+    properties.product_sku AS product_sku,
+    DATE(timestamp) AS date,
+    SUM(SAFE_CAST(properties.total_price AS FLOAT64)) AS revenue
+  FROM `gcloudltds.eu1_3ba9a1f4_0e5f_11ed_991c_defdc205edb1_views.purchase_item`
+  GROUP BY product_sku, date
+),
+revenue_rank AS(
+  SELECT
+    o.*,
+    r.revenue,
+    RANK() OVER (PARTITION BY o.date ORDER BY (r.revenue) DESC) AS rank_revenue
+  FROM ${ref('output_stock_analysis')} o
+  LEFT JOIN revenue_per_product_day r
+    ON o.product_sku = r.product_sku AND o.date = r.date
 )
 
 SELECT
-  o.*,
-  LAG(rank_items_viewed) OVER (PARTITION BY o.product_sku ORDER BY o.date) AS previous_views_rank,
-  LAG(rank_add_to_carts) OVER (PARTITION BY o.product_sku ORDER BY o.date) AS previous_add_to_cart_rank,
-  LAG(rank_purchased_items) OVER (PARTITION BY o.product_sku ORDER BY o.date) AS previous_sales_rank,
+  rr.*,
+  LAG(rr.rank_revenue) OVER (PARTITION BY rr.product_sku ORDER BY rr.date) AS previous_revenue_rank,
+  LAG(rank_items_viewed) OVER (PARTITION BY rr.product_sku ORDER BY rr.date) AS previous_views_rank,
+  LAG(rank_add_to_carts) OVER (PARTITION BY rr.product_sku ORDER BY rr.date) AS previous_add_to_cart_rank,
+  LAG(rank_purchased_items) OVER (PARTITION BY rr.product_sku ORDER BY rr.date) AS previous_sales_rank,
   
   -- Status Flags
   CASE
@@ -58,17 +73,14 @@ SELECT
     ELSE 'No Data'
   END AS sales_status
 
-FROM ${ref('output_stock_analysis')} o
-JOIN product_last_stocked pls
-  ON o.product_sku = pls.product_sku
-WHERE DATE(pls.last_stock_date) >= DATE_SUB(CURRENT_DATE(), INTERVAL 90 DAY) 
+FROM revenue_rank rr
+WHERE rr.product_sku IN (SELECT product_sku FROM recent_product_skus)
 ${when(incremental(), 
   `AND date > (
      SELECT IFNULL(MAX(date), DATE("2024-11-07"))
      FROM ${self()}
   )`
 )}
-
 
 pre_operations {
   CREATE TABLE IF NOT EXISTS ${self()} (
@@ -82,12 +94,15 @@ pre_operations {
     purchased_items NUMERIC,
     aggregated_sizes STRING,
     total_stock INT64,
+    revenue FLOAT64,
     rank_items_viewed INT64,
     rank_add_to_carts INT64,
     rank_purchased_items INT64,
+    rank_revenue INT64,
     previous_views_rank INT64,
     previous_add_to_cart_rank INT64,
     previous_sales_rank INT64,
+    previous_revenue_rank INT64,
     views_status STRING,
     add_to_cart_status STRING,
     sales_status STRING
