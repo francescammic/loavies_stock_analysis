@@ -7,10 +7,11 @@ config {
     partitionBy: "date"
   }
 }
+
 WITH last_stocked_date AS (
   SELECT
     sku,
-    MAX(snapshot_date) AS last_stock_date
+    MAX(SAFE_CAST(snapshot_date AS DATE)) AS last_stock_date
   FROM `crack-celerity-275610.product_feed.product_feed_snapshot` 
   WHERE SAFE_CAST(stock AS FLOAT64) > 0.0
   GROUP BY sku

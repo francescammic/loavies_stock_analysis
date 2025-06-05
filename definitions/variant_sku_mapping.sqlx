@@ -1,16 +1,16 @@
 config {
-  type: "incremental",
+  type: "table",
   schema: "product_feed",
   name: "variant_sku_mapping", 
   description: "Mapping of variant SKUs to general product SKUs with deduplication. Contains only the latest row per variant_sku"
-} --got rid of the partition by due to the errors with localized_timestamp
+}
 
 -- WITH clauses for data transformation
 WITH cleaned_purchase_item AS (
   -- Step 1: Filter out invalid variant_sku values
   SELECT
-    REPLACE(REPLACE(REPLACE(properties.product_sku, '[', ''), ']', ''), '"', '') AS product_sku,
-    REPLACE(REPLACE(REPLACE(properties.variant_sku, '[', ''), ']', ''), '"', '') AS variant_sku,
+    (TRIM(REGEXP_REPLACE(properties.product_sku, r'[\[\]"]', ''))) AS product_sku,
+    (TRIM(REGEXP_REPLACE(properties.variant_sku, r'[\[\]"]', ''))) AS variant_sku,
     LOWER(properties.category_level_1) AS category_level_1,
     LOWER(properties.category_level_2) AS category_level_2,
     LOWER(properties.category_level_3) AS category_level_3,
@@ -59,9 +59,9 @@ distinct_values AS (
 SELECT
   *
 FROM distinct_values
-${when(incremental(), 
-  `WHERE localized_timestamp > (SELECT MAX(localized_timestamp) FROM ${self()})`
-)}
+-- ${when(incremental(), 
+--   `WHERE localized_timestamp > (SELECT MAX(localized_timestamp) FROM ${self()})`
+-- )}
 
 -- Pre-operations for table creation and cleanup
 pre_operations {
@@ -74,7 +74,7 @@ pre_operations {
     localized_timestamp DATETIME
   );
 
-  DELETE FROM ${self()}
-  WHERE DATETIME(localized_timestamp) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
-                                      AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
+--   DELETE FROM ${self()}
+--   WHERE DATETIME(localized_timestamp) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_start_period} DAY) 
+--                                       AND DATE_SUB(CURRENT_DATE(), INTERVAL ${constants.updatedelete_end_period} DAY);
 }

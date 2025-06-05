@@ -58,19 +58,31 @@ feed_info AS (
     ON f.variant_sku = u.variant_sku
   ),
   aggregated_feed AS (
-    -- Aggregate to the general SKU level
-    SELECT
-      product_sku,
-      category_level_1,
-      category_level_2,
-      category_level_3,
-      snapshot_date,
-      STRING_AGG(sizes, ', ') AS aggregated_sizes,  -- Combine sizes across variants
-      SUM(total_bf_stock) AS total_stock  -- Sum stock across variants
-    FROM mapped_feed
-    WHERE product_sku IS NOT NULL  -- Exclude unmapped variant SKUs
-    GROUP BY product_sku, snapshot_date, category_level_1, category_level_2, category_level_3
-  ),
+  SELECT
+    product_sku,
+    snapshot_date,
+    category_level_1,
+    --the category levels 2&3 can differ across different variant skus which cause there to be multiple rows for one product_sku. So we can only take one value from each. Can create mapping table if imporant
+    LAST_VALUE(category_level_2 IGNORE NULLS) OVER w AS category_level_2,
+    LAST_VALUE(category_level_3 IGNORE NULLS) OVER w AS category_level_3,
+    sizes,
+    total_bf_stock
+  FROM mapped_feed
+  WINDOW w AS (PARTITION BY product_sku, snapshot_date ORDER BY snapshot_date ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+),
+final_aggregated_feed AS (
+  SELECT
+    product_sku,
+    category_level_1,
+    category_level_2,
+    category_level_3,
+    snapshot_date,
+    STRING_AGG(sizes, ', ') AS aggregated_sizes,
+    SUM(total_bf_stock) AS total_stock
+  FROM aggregated_feed
+  GROUP BY product_sku, snapshot_date, category_level_1, category_level_2, category_level_3
+),
+
   w_sales_info AS (
     SELECT
       COALESCE(sw.date, af.snapshot_date) AS date,
@@ -84,7 +96,7 @@ feed_info AS (
       af.aggregated_sizes,
       af.total_stock
     FROM ${ref('sales_web_information')} sw 
-    FULL OUTER JOIN aggregated_feed af
+    FULL OUTER JOIN final_aggregated_feed af
     ON sw.date = af.snapshot_date AND sw.product_sku = af.product_sku
   ),
   --filled_sales_info and final_output is for filling the null total_stock, and aggregated sizes values due to the product sku on that date not exisiting in the product_feed_snapshot due to a delay.
